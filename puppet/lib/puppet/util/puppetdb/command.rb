@@ -24,28 +24,70 @@ class Puppet::Util::Puppetdb::Command
   #   primitive (numeric type, string, array, or hash) that is natively supported
   #   by JSON serialization / deserialization libraries.
   def initialize(command, version, certname, payload)
+    Puppet.info ("* puppetdb cmd start initializing: #{command}")
     profile("Format payload", [:puppetdb, :payload, :format]) do
-      @checksum_payload = Puppet::Util::Puppetdb::CharEncoding.utf8_string({
-        :command => command,
-        :version => version,
-        :certname => certname,
-        :payload => payload,
-      # We use to_pson still here, to work around the support for shifting
-      # binary data from a catalog to PuppetDB. Attempting to use to_json
-      # we get to_json conversion errors:
-      #
-      #   Puppet source sequence is illegal/malformed utf-8
-      #   json/ext/GeneratorMethods.java:71:in `to_json'
-      #   puppet/util/puppetdb/command.rb:31:in `initialize'
-      #
-      # This is roughly inline with how Puppet serializes for catalogs as of
-      # Puppet 4.1.0. We need a better answer to non-utf8 data end-to-end.
-      }.to_pson, "Error encoding a '#{command}' command for host '#{certname}'")
+      if command == "store report"
+        Puppet.info("* puppetdb using cached report")
+        @@report_checksum_payload ||= Puppet::Util::Puppetdb::CharEncoding.utf8_string({
+          :command => command,
+          :version => version,
+          :certname => certname,
+          :payload => payload,
+        # We use to_pson still here, to work around the support for shifting
+        # binary data from a catalog to PuppetDB. Attempting to use to_json
+        # we get to_json conversion errors:
+        #
+        #   Puppet source sequence is illegal/malformed utf-8
+        #   json/ext/GeneratorMethods.java:71:in `to_json'
+        #   puppet/util/puppetdb/command.rb:31:in `initialize'
+        #
+        # This is roughly inline with how Puppet serializes for catalogs as of
+        # Puppet 4.1.0. We need a better answer to non-utf8 data end-to-end.
+        }.to_pson, "Error encoding a '#{command}' command for host '#{certname}'")
+        @@report_initial_transaction_uuid ||= payload["transaction_uuid"]
+        @@report_initial_producer_timestamp ||= payload["producer_timestamp"]
+        @checksum_payload = @@report_checksum_payload.gsub(
+                                 /#{@@report_initial_transaction_uuid}/,
+                                 payload["transaction_uuid"]).gsub(
+                                 /#{@@report_initial_producer_timestamp}/,
+                                 payload["producer_timestamp"])
+      else
+        @checksum_payload = Puppet::Util::Puppetdb::CharEncoding.utf8_string({
+          :command => command,
+          :version => version,
+          :certname => certname,
+          :payload => payload,
+        # We use to_pson still here, to work around the support for shifting
+        # binary data from a catalog to PuppetDB. Attempting to use to_json
+        # we get to_json conversion errors:
+        #
+        #   Puppet source sequence is illegal/malformed utf-8
+        #   json/ext/GeneratorMethods.java:71:in `to_json'
+        #   puppet/util/puppetdb/command.rb:31:in `initialize'
+        #
+        # This is roughly inline with how Puppet serializes for catalogs as of
+        # Puppet 4.1.0. We need a better answer to non-utf8 data end-to-end.
+        }.to_pson, "Error encoding a '#{command}' command for host '#{certname}'")
+      end
     end
+
     @command = Puppet::Util::Puppetdb::CharEncoding.coerce_to_utf8(command).gsub(" ", "_")
     @version = version
     @certname = Puppet::Util::Puppetdb::CharEncoding.coerce_to_utf8(certname)
-    @payload = Puppet::Util::Puppetdb::CharEncoding.coerce_to_utf8(payload.to_pson)
+
+    if command == "store report"
+       @@report_payload_in_pson ||= payload.to_pson
+       payload_in_pson = @@report_payload_in_pson.gsub(
+                                 /#{@@report_initial_transaction_uuid}/,
+                                 payload["transaction_uuid"]).gsub(
+                                 /#{@@report_initial_producer_timestamp}/,
+                                 payload["producer_timestamp"])
+    else
+       payload_in_pson = payload.to_pson
+    end
+       
+    @payload = Puppet::Util::Puppetdb::CharEncoding.coerce_to_utf8(payload_in_pson)
+    Puppet.info ("* puppetdb cmd done initializing: #{command}")
   end
 
   attr_reader :command, :version, :certname, :payload, :checksum_payload
